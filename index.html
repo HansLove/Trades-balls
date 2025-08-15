@@ -82,8 +82,8 @@
         </div>
         <div class="row">
           <label>Max Balls</label>
-          <input id="maxBalls" type="range" min="50" max="800" step="10" value="350" />
-          <span id="maxVal" class="tag">350</span>
+          <input id="maxBalls" type="range" min="50" max="800" step="10" value="150" />
+          <span id="maxVal" class="tag">150</span>
         </div>
         <div class="row">
           <label>Auto-Stream</label>
@@ -118,7 +118,7 @@
   const world = {
     gravity: 0.35, // px/frame^2 (scaled by DPR)
     running: true,
-    maxBalls: 350,
+    maxBalls: 150,
     balls: [],
     lastSpawn: 0,
     spawnInterval: 1000/6, // ms per ball in auto mode
@@ -129,6 +129,8 @@
       lotsRange: [0.05, 1.5],
       profitRangeSmall: [5, 250],
       profitRangeBig: [250, 2000],
+      profitRangeHuge: [2000, 12000],
+      weights: { small: 0.7, big: 0.25, huge: 0.05 },
       bigProfitChance: 0.3,
     },
     // 3D arena
@@ -141,7 +143,15 @@
     cameraZ: -260,
     autoCam: true,
     camTime: 0,
-    camBase: { yaw: -0.18, pitch: -0.22, z: -260 }
+    camBase: { yaw: -0.18, pitch: -0.22, z: -260 },
+    platform: {
+      y: 90,
+      halfWidthX: 520,
+      z0: 160,
+      z1: 520,
+      bounce: 0.4,
+      friction: 0.985
+    }
   };
 
   // ===== 3D Projection helpers =====
@@ -182,14 +192,28 @@
       this.sleep = false; // when settled at the bottom
       // mass scales with size so bigger balls dominate collisions
       this.m = Math.max(1, r*r);
+      // simple spin based on tangential motion
+      this.spinU = rand(0, Math.PI*2); // around x axis
+      this.spinV = rand(0, Math.PI*2); // around z axis
+      this.spinSpeedU = rand(-0.05, 0.05);
+      this.spinSpeedV = rand(-0.05, 0.05);
     }
   }
 
   function mapRadiusFromProfitUSD(usd){
-    const s = Math.log10(Math.abs(usd) + 10); // log scale
-    const sMin = Math.log10(10); // 1
-    const sMax = Math.log10(2000 + 10); // ~3.303
-    const t = clamp((s - sMin) / (sMax - sMin), 0, 1);
+    // piecewise mapping: small (70%), big (25%), huge (5%) expand radius range
+    const a = Math.abs(usd);
+    let t;
+    if(a <= 250){
+      // small band: 0..250 -> 0..0.5
+      t = clamp(a/250, 0, 1) * 0.5;
+    }else if(a <= 2000){
+      // big band: 250..2000 -> 0.5..0.85
+      t = 0.5 + clamp((a-250)/(2000-250), 0, 1)*0.35;
+    }else{
+      // huge band: 2000..12000 -> 0.85..1.0
+      t = 0.85 + clamp((a-2000)/(12000-2000), 0, 1)*0.15;
+    }
     return lerp(6, 26, t);
   }
   function mapRadiusFromLots(lots){
@@ -278,6 +302,18 @@
       if(b.x >  world.arenaHalfWidthX - b.r){ b.x =  world.arenaHalfWidthX - b.r; b.vx *= -0.5; }
       if(b.z < b.r){ b.z = b.r; b.vz *= -0.5; }
       if(b.z > world.arenaDepthZ - b.r){ b.z = world.arenaDepthZ - b.r; b.vz *= -0.5; }
+
+      // Platform collision (slab y around world.platform.y between z0..z1)
+      const P = world.platform;
+      if(b.z > P.z0 && b.z < P.z1 && b.y - b.r < P.y){
+        b.y = P.y + b.r;
+        b.vy *= -P.bounce;
+        // transfer some vertical energy to tangential spin and horizontal motion
+        const tangentEnergy = 0.03;
+        b.vx = b.vx * P.friction + rand(-tangentEnergy, tangentEnergy);
+        b.vz = b.vz * P.friction + rand(-tangentEnergy, tangentEnergy);
+        b.spinSpeedU += (b.vx)*0.02; b.spinSpeedV += (b.vz)*0.02;
+      }
 
       // Floor collision (floor at y=0)
       if(b.y - b.r < floorY){
@@ -376,13 +412,14 @@
     for(const b of sorted){
       const proj = project3D(b);
 
-      // Shadow ellipse on floor position beneath ball
+      // Shadow ellipse on floor position beneath ball (depend on distance + height)
       const floorProj = project3D({x:b.x, y:0, z:b.z});
-      const heightFactor = clamp(1 - (b.y - b.r)/380, 0, 1);
-      const shadowScale = Math.max(0, proj.scale * heightFactor);
-      const shadowAlpha = 0.22 * heightFactor;
-      const shadowW = Math.max(0.0001, b.r * 2.6 * shadowScale);
-      const shadowH = Math.max(0.0001, shadowW * 0.45);
+      const heightFactor = clamp(1 - (b.y - b.r)/420, 0, 1);
+      const distanceFade = clamp(1 - (floorProj.zCam/(world.perspective*2)), 0.2, 1);
+      const shadowScale = Math.max(0, floorProj.scale * 0.95 * heightFactor);
+      const shadowAlpha = 0.26 * heightFactor * distanceFade;
+      const shadowW = Math.max(0.0001, b.r * 2.8 * shadowScale);
+      const shadowH = Math.max(0.0001, shadowW * 0.42);
       ctx.fillStyle = `rgba(0,0,0,${clamp(shadowAlpha,0,0.25)})`;
       ctx.beginPath(); ctx.ellipse(floorProj.x, floorProj.y, shadowW, shadowH, 0, 0, Math.PI*2); ctx.fill();
 
@@ -393,7 +430,7 @@
       ctx.fillStyle = glow;
       ctx.beginPath(); ctx.arc(proj.x, proj.y, b.r*2.2*proj.scale, 0, Math.PI*2); ctx.fill();
 
-      // Core sphere with simple lighting
+      // Core sphere with simple lighting + spin highlight
       const coreR = b.r * proj.scale;
       // fake rim lighting by darkening edge
       const rim = ctx.createRadialGradient(proj.x, proj.y, Math.max(0.001, coreR*0.65), proj.x, proj.y, Math.max(0.002, coreR));
@@ -418,6 +455,16 @@
       ctx.fill();
       ctx.fillStyle = rim; ctx.beginPath(); ctx.arc(proj.x, proj.y, coreR, 0, Math.PI*2); ctx.fill();
 
+      // Spin indicator: a subtle moving specular dot that orbits
+      b.spinU += b.spinSpeedU; b.spinV += b.spinSpeedV;
+      const spinRadius = coreR*0.6;
+      const hx = proj.x + Math.cos(b.spinU) * spinRadius * 0.6;
+      const hy = proj.y + Math.sin(b.spinV) * spinRadius * 0.6;
+      const spec = ctx.createRadialGradient(hx, hy, 0.5, hx, hy, Math.max(0.001, coreR*0.28));
+      spec.addColorStop(0, 'rgba(255,255,255,0.8)');
+      spec.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = spec; ctx.beginPath(); ctx.arc(proj.x, proj.y, coreR, 0, Math.PI*2); ctx.fill();
+
       // Label (symbol)
       if(b.r > 14 && b.label){
         ctx.font = '600 10px ui-sans-serif, system-ui, -apple-system';
@@ -431,17 +478,17 @@
   }
 
   function drawFloorGrid(){
-    const gridColor = 'rgba(255,255,255,0.05)';
+    const gridColor = 'rgba(255,255,255,0.045)';
     ctx.strokeStyle = gridColor; ctx.lineWidth = 1;
     const half = world.arenaHalfWidthX;
     // depth lines (constant x)
-    for(let x=-half; x<=half; x+= 120){
+    for(let x=-half; x<=half; x+= 160){
       const p0 = project3D({x, y:0, z: 0});
       const p1 = project3D({x, y:0, z: world.arenaDepthZ});
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
     }
     // horizontal lines (constant z)
-    for(let z=0; z<=world.arenaDepthZ; z+= 200){
+    for(let z=0; z<=world.arenaDepthZ; z+= 260){
       const p0 = project3D({x:-half, y:0, z});
       const p1 = project3D({x: half, y:0, z});
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
@@ -449,7 +496,7 @@
     // back wall faint line
     const bw0 = project3D({x:-half, y:0, z:world.arenaDepthZ});
     const bw1 = project3D({x: half, y:0, z:world.arenaDepthZ});
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
     ctx.beginPath(); ctx.moveTo(bw0.x, bw0.y); ctx.lineTo(bw1.x, bw1.y); ctx.stroke();
 
     // vignetting at edges
@@ -476,9 +523,15 @@
           world.lastSpawn -= per;
           const isBuy = Math.random() < ro.buyProbability;
           const lots = rand(ro.lotsRange[0], ro.lotsRange[1]);
-          const big = Math.random() < ro.bigProfitChance;
-          const profit = big ? rand(ro.profitRangeBig[0], ro.profitRangeBig[1])
-                             : rand(ro.profitRangeSmall[0], ro.profitRangeSmall[1]);
+          const r = Math.random();
+          let profit;
+          if(r < ro.weights.small){
+            profit = rand(ro.profitRangeSmall[0], ro.profitRangeSmall[1]);
+          }else if(r < ro.weights.small + ro.weights.big){
+            profit = rand(ro.profitRangeBig[0], ro.profitRangeBig[1]);
+          }else{
+            profit = rand(ro.profitRangeHuge[0], ro.profitRangeHuge[1]);
+          }
           const symbol = ro.symbolPool[(Math.random()*ro.symbolPool.length)|0];
           spawnBall({
             side: isBuy ? 'buy':'sell',
