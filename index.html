@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trade Rain — Plinko-Style (Standalone)</title>
+  <style>
+    :root{
+      --bg:#0b1220; /* deep navy */
+      --panel:#111a2b;
+      --accent:#48d597;
+      --accent-2:#ef4444;
+      --ink:#e6f0ff;
+      --muted:#7b8aa1;
+      --peg:#1f2d47;
+      --grid:#0f1a30;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:radial-gradient(1200px 800px at 70% -10%, #18243d 0%, var(--bg) 60%);}    
+    body{font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; color:var(--ink);}
+
+    /* Layout */
+    .wrap{position:fixed; inset:0; display:grid; grid-template-columns: 1fr;}
+    canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
+
+    /* HUD */
+    .hud{position:fixed; top:16px; right:16px; display:flex; gap:12px; align-items:flex-start; z-index:10}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03)); border:1px solid rgba(255,255,255,0.08); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius:16px; padding:12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25);} 
+    .card h3{margin:0 0 8px 0; font-size:13px; letter-spacing:.4px; text-transform:uppercase; color:var(--muted)}
+    .row{display:flex; gap:8px; align-items:center; margin:8px 0}
+    label{font-size:12px; color:var(--muted)}
+    input[type="range"]{width:140px}
+    .pill{display:inline-flex; align-items:center; gap:8px; background:#0f1a30; border:1px solid #1c2a45; padding:6px 10px; border-radius:999px; font-size:12px}
+    .btn{cursor:pointer; user-select:none; border:none; border-radius:12px; padding:8px 12px; font-weight:600; background:#16223a; color:#dbe7ff; border:1px solid #203055; transition:transform .06s ease, background .2s}
+    .btn:hover{background:#1a2a4a}
+    .btn:active{transform:translateY(1px)}
+    .dot{width:10px; height:10px; border-radius:50%}
+    .dot.green{background:var(--accent)}
+    .dot.red{background:var(--accent-2)}
+
+    /* Footer */
+    .footer{position:fixed; left:16px; bottom:16px; display:flex; gap:10px; align-items:center; z-index:10}
+    .tag{font-size:12px; color:var(--muted)}
+
+    /* Tooltip */
+    .toast{position:fixed; left:50%; transform:translateX(-50%); top:16px; background:#0e1730; border:1px solid #203055; color:#dbe7ff; padding:8px 12px; border-radius:10px; font-size:12px; opacity:0; pointer-events:none; transition: opacity .25s ease}
+    .toast.show{opacity:1}
+
+    /* Bottom bins */
+    .bins{position:fixed; left:0; right:0; bottom:0; height:120px; pointer-events:none}
+    .bin{position:absolute; bottom:0; width:2px; background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,0));}
+
+    /* Nice subtle grid */
+    .fg-grid{position:fixed; inset:0; pointer-events:none; background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 60px 60px; mask: linear-gradient(to bottom, rgba(0,0,0,.18), rgba(0,0,0,.6));}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="stage"></canvas>
+    <div class="fg-grid"></div>
+
+    <div class="hud">
+      <div class="card" id="controls">
+        <h3>Live Controls</h3>
+        <div class="row">
+          <button class="btn" id="toggle">Pause</button>
+          <button class="btn" id="clear">Clear</button>
+          <span class="pill"><span class="dot green"></span>Buy</span>
+          <span class="pill"><span class="dot red"></span>Sell</span>
+        </div>
+        <div class="row">
+          <label>Gravity</label>
+          <input id="gravity" type="range" min="0" max="3" step="0.05" value="1.1" />
+          <span id="gravityVal" class="tag">1.10</span>
+        </div>
+        <div class="row">
+          <label>Spawn/sec</label>
+          <input id="rate" type="range" min="0" max="15" step="1" value="6" />
+          <span id="rateVal" class="tag">6</span>
+        </div>
+        <div class="row">
+          <label>Max Balls</label>
+          <input id="maxBalls" type="range" min="50" max="800" step="10" value="350" />
+          <span id="maxVal" class="tag">350</span>
+        </div>
+        <div class="row">
+          <label>Auto-Stream</label>
+          <input id="auto" type="checkbox" checked />
+        </div>
+      </div>
+
+      <div class="card" id="help">
+        <h3>How to feed trades</h3>
+        <div class="tag">From the console or another script, call:</div>
+        <pre style="margin:6px 0 0; padding:8px 10px; background:#0c1530; border:1px solid #203055; border-radius:10px; overflow:auto; max-width:420px"><code style="font-size:12px; color:#bcd9ff; display:block">window.pushTrade({ side: "buy", lots: 0.3, profitUSD: 42, symbol: "XAUUSD" })
+window.pushTrade({ side: "sell", profitUSD: -350, symbol: "BTCUSD" })
+window.setTradeAdapter((p) => ({ side: p.s > 0 ? "buy" : "sell", profitUSD: p.s, symbol: p.sym, lots: p.l || 0.2 }))
+window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURUSD","US30"], bigProfitChance: 0.2 })</code></pre>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="tag">Trade Rain · Canvas physics demo · ⌘/Ctrl+K to spawn 20</div>
+    </div>
+
+    <div id="toast" class="toast">Copied API usage to clipboard</div>
+
+    <div class="bins" id="bins"></div>
+  </div>
+
+<script>
+(function(){
+  // ===== Utilities =====
+  const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
+  const lerp = (a,b,t) => a + (b-a)*t;
+  const rand = (a,b) => Math.random()*(b-a)+a;
+
+  // ===== Canvas & Scene =====
+  const c = document.getElementById('stage');
+  const ctx = c.getContext('2d');
+  let W=0,H=0, DPR = Math.max(1, Math.min(2, window.devicePixelRatio||1));
+
+  const world = {
+    gravity: 1.1, // px/frame^2 (scaled by DPR)
+    running: true,
+    maxBalls: 350,
+    balls: [],
+    pegs: [],
+    bins: [],
+    lastSpawn: 0,
+    spawnInterval: 1000/6, // ms per ball in auto mode
+    adapter: null,
+    randomOptions: {
+      buyProbability: 0.5,
+      symbolPool: ["XAUUSD","EURUSD","BTCUSD"],
+      lotsRange: [0.05, 1.5],
+      profitRangeSmall: [5, 250],
+      profitRangeBig: [250, 2000],
+      bigProfitChance: 0.3,
+    }
+  };
+
+  // ===== Peg Field constants (Plinko grid) =====
+  const pegSpacingX = 48; // px
+  const pegSpacingY = 42; // px
+  const pegR = 5;
+
+  // ===== Spatial Hash storage (pegs) =====
+  const cell = 56;
+  const grid = new Map();
+
+  function resize(){
+    W = c.clientWidth = window.innerWidth;
+    H = c.clientHeight = window.innerHeight;
+    c.width = Math.floor(W*DPR);
+    c.height = Math.floor(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    buildPegs();
+    buildGrid(); // rebuild spatial hash when pegs change
+    buildBins();
+  }
+  window.addEventListener('resize', resize, {passive:true});
+  resize();
+
+  // ===== Peg Field (Plinko grid) =====
+  function buildPegs(){
+    const marginTop = 60, marginSide = 60;
+    const cols = Math.floor((W - marginSide*2) / pegSpacingX);
+    const rows = Math.floor((H*0.65 - marginTop) / pegSpacingY);
+    const startX = (W - cols*pegSpacingX)/2 + pegSpacingX*0.5;
+    world.pegs.length = 0;
+    for(let r=0;r<rows;r++){
+      for(let cidx=0;cidx<cols;cidx++){
+        const offset = (r%2===0)?0:pegSpacingX/2;
+        const x = startX + cidx*pegSpacingX + offset;
+        const y = marginTop + r*pegSpacingY;
+        world.pegs.push({x,y,r:pegR});
+      }
+    }
+  }
+
+  // ===== Bottom Bins (visual only) =====
+  function buildBins(){
+    const el = document.getElementById('bins');
+    el.innerHTML = '';
+    const count = Math.floor(W / 60);
+    for(let i=0;i<count;i++){
+      const b = document.createElement('div');
+      b.className='bin';
+      b.style.left = `${(i* (W/count))|0}px`;
+      b.style.height = `${60 + (i%2)*20}px`;
+      el.appendChild(b);
+    }
+  }
+
+  // ===== Spatial Hash (pegs) =====
+  function gridKey(x,y){return ((x/cell)|0)+','+((y/cell)|0)}
+  function buildGrid(){
+    grid.clear();
+    for(const p of world.pegs){
+      const key = gridKey(p.x,p.y);
+      if(!grid.has(key)) grid.set(key,[]);
+      grid.get(key).push(p);
+    }
+  }
+  buildGrid();
+
+  // ===== Balls =====
+  class Ball{
+    constructor({x,y,r,color,label}){
+      this.x = x; this.y = y; this.r = r; this.color = color; this.label = label||'';
+      this.vx = rand(-0.5,0.5); this.vy = 0;
+      this.sleep = false; // when settled at the bottom
+    }
+  }
+
+  function mapRadiusFromProfitUSD(usd){
+    const s = Math.log10(Math.abs(usd) + 10); // log scale
+    const sMin = Math.log10(10); // 1
+    const sMax = Math.log10(2000 + 10); // ~3.303
+    const t = clamp((s - sMin) / (sMax - sMin), 0, 1);
+    return lerp(6, 26, t);
+  }
+  function mapRadiusFromLots(lots){
+    const l = clamp(lots, 0.05, 3.0);
+    const t = (l - 0.05) / (3.0 - 0.05);
+    return lerp(6, 26, clamp(t, 0, 1));
+  }
+
+  function spawnBall(trade){
+    const side = (trade?.side||'buy').toLowerCase();
+    const lots = Number(trade?.lots ?? 0.2);
+    const usd = Number(trade?.profitUSD);
+    // Radius mapping: 6px to 26px based on |usd| or lots
+    const r = Math.round(
+      isFinite(usd) && !Number.isNaN(usd) ? mapRadiusFromProfitUSD(usd) : mapRadiusFromLots(lots)
+    );
+    const color = side==='sell' ? '#ef4444' : '#48d597';
+
+    const x = W*0.2 + Math.random()*W*0.6; // spawn within center band
+    const y = -40;
+    const b = new Ball({x,y,r,color,label: trade?.symbol||''});
+    world.balls.push(b);
+    if(world.balls.length > world.maxBalls){
+      world.balls.splice(0, world.balls.length - world.maxBalls);
+    }
+  }
+
+  // Public API to feed trades
+  window.pushTrade = function(trade){
+    try{
+      if(typeof world.adapter === 'function'){
+        const adapted = world.adapter(trade);
+        if(adapted && typeof adapted === 'object') trade = adapted;
+      }
+    }catch(e){ /* ignore adapter errors */ }
+    spawnBall(trade);
+  }
+
+  window.setTradeAdapter = function(adapter){
+    world.adapter = (typeof adapter === 'function') ? adapter : null;
+  }
+
+  window.setRandomStreamOptions = function(opts={}){
+    const ro = world.randomOptions;
+    if('buyProbability' in opts && typeof opts.buyProbability === 'number') ro.buyProbability = clamp(opts.buyProbability, 0, 1);
+    if(Array.isArray(opts.symbolPool) && opts.symbolPool.length) ro.symbolPool = opts.symbolPool.slice(0, 24);
+    if(Array.isArray(opts.lotsRange) && opts.lotsRange.length===2) ro.lotsRange = [Math.max(0.01, opts.lotsRange[0]), Math.max(0.02, opts.lotsRange[1])];
+    if(Array.isArray(opts.profitRangeSmall) && opts.profitRangeSmall.length===2) ro.profitRangeSmall = opts.profitRangeSmall;
+    if(Array.isArray(opts.profitRangeBig) && opts.profitRangeBig.length===2) ro.profitRangeBig = opts.profitRangeBig;
+    if('bigProfitChance' in opts && typeof opts.bigProfitChance === 'number') ro.bigProfitChance = clamp(opts.bigProfitChance, 0, 1);
+  }
+
+  // ===== Physics =====
+  const bounce = 0.55; // restitution on floor
+  const air = 0.999;   // air drag
+  const floorY = () => H - 90; // top of bins
+
+  function step(dt){
+    const g = world.gravity * (dt/16.66);
+
+    // Rebuild grid occasionally (pegs static; once per resize is enough)
+    // buildGrid(); // pegs don't move — skip per-frame for perf
+
+    // Balls
+    for(const b of world.balls){
+      if(b.sleep) continue;
+      // Integrate
+      b.vy += g;
+      b.vx *= air; b.vy *= air;
+      b.x += b.vx; b.y += b.vy;
+
+      // Walls
+      if(b.x < b.r){ b.x=b.r; b.vx*=-0.4; }
+      if(b.x > W-b.r){ b.x=W-b.r; b.vx*=-0.4; }
+
+      // Peg collisions via spatial lookup
+      const gx = Math.floor(b.x/cell), gy = Math.floor(b.y/cell);
+      for(let ix=-1; ix<=1; ix++){
+        for(let iy=-1; iy<=1; iy++){
+          const key = (gx+ix)+","+(gy+iy);
+          const list = grid.get(key); if(!list) continue;
+          for(const p of list){
+            const dx = b.x - p.x;
+            const dy = b.y - p.y;
+            const d2 = dx*dx + dy*dy;
+            const min = b.r + p.r + 1;
+            if(d2 < min*min){
+              const d = Math.sqrt(d2) || 0.001;
+              const nx = dx/d, ny = dy/d;
+              // Push out
+              const overlap = (min - d);
+              b.x += nx * overlap;
+              b.y += ny * overlap;
+              // Reflect velocity with some dampening
+              const vn = b.vx*nx + b.vy*ny;
+              b.vx -= 1.4 * vn * nx;
+              b.vy -= 1.4 * vn * ny;
+            }
+          }
+        }
+      }
+
+      // Floor
+      const fY = floorY();
+      if(b.y + b.r > fY){
+        b.y = fY - b.r;
+        b.vy *= -bounce;
+        b.vx *= 0.98;
+        if(Math.abs(b.vy) < 0.35){
+          // Consider it sleeping (settled)
+          b.vy = 0; b.vx *= 0.97; b.sleep = true;
+        }
+      }
+
+      // Gentle sleeping friction
+      if(b.sleep){
+        b.vx *= 0.985; if(Math.abs(b.vx) < 0.02) b.vx = 0;
+      }
+    }
+  }
+
+  // ===== Render =====
+  function draw(){
+    // Background
+    ctx.clearRect(0,0,W,H);
+
+    // Subtle vignette
+    const grd = ctx.createRadialGradient(W*0.5, H*0.15, 80, W*0.5, H*0.2, Math.max(W,H));
+    grd.addColorStop(0,'rgba(255,255,255,0.04)');
+    grd.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle = grd; ctx.fillRect(0,0,W,H);
+
+    // Pegs
+    ctx.fillStyle = '#1f2d47';
+    for(const p of world.pegs){
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // Floor line
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, floorY());
+    ctx.lineTo(W, floorY());
+    ctx.stroke();
+
+    // Balls
+    for(const b of world.balls){
+      // Glow
+      const glow = ctx.createRadialGradient(b.x, b.y, 2, b.x, b.y, b.r*2.2);
+      glow.addColorStop(0, b.color + '');
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r*2.2, 0, Math.PI*2); ctx.fill();
+
+      // Core
+      ctx.fillStyle = b.color;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fill();
+
+      // Label (symbol)
+      if(b.r > 14 && b.label){
+        ctx.font = '600 10px ui-sans-serif, system-ui, -apple-system';
+        ctx.fillStyle = 'rgba(0,0,0,.45)';
+        ctx.textAlign = 'center';
+        ctx.fillText(b.label.toUpperCase(), b.x+1, b.y+3);
+        ctx.fillStyle = 'rgba(255,255,255,.9)';
+        ctx.fillText(b.label.toUpperCase(), b.x, b.y+2);
+      }
+    }
+  }
+
+  // ===== Loop =====
+  let last = performance.now();
+  function loop(t){
+    const dt = t - last; last = t;
+    if(world.running){
+      step(dt);
+      draw();
+
+      // Auto stream
+      if(auto.checked){
+        world.lastSpawn += dt;
+        const per = 1000/Number(rate.value || 1);
+        const ro = world.randomOptions;
+        while(world.lastSpawn >= per){
+          world.lastSpawn -= per;
+          const isBuy = Math.random() < ro.buyProbability;
+          const lots = rand(ro.lotsRange[0], ro.lotsRange[1]);
+          const big = Math.random() < ro.bigProfitChance;
+          const profit = big ? rand(ro.profitRangeBig[0], ro.profitRangeBig[1])
+                             : rand(ro.profitRangeSmall[0], ro.profitRangeSmall[1]);
+          const symbol = ro.symbolPool[(Math.random()*ro.symbolPool.length)|0];
+          spawnBall({
+            side: isBuy ? 'buy':'sell',
+            lots,
+            profitUSD: profit,
+            symbol
+          });
+        }
+      }
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ===== Controls =====
+  const gravity = document.getElementById('gravity');
+  const gravityVal = document.getElementById('gravityVal');
+  const rate = document.getElementById('rate');
+  const rateVal = document.getElementById('rateVal');
+  const maxBalls = document.getElementById('maxBalls');
+  const maxVal = document.getElementById('maxVal');
+  const toggle = document.getElementById('toggle');
+  const clearBtn = document.getElementById('clear');
+  const auto = document.getElementById('auto');
+
+  gravity.addEventListener('input', () => {
+    world.gravity = Number(gravity.value);
+    gravityVal.textContent = world.gravity.toFixed(2);
+  });
+  rate.addEventListener('input', () => { rateVal.textContent = rate.value; world.spawnInterval= 1000/Number(rate.value||1); });
+  maxBalls.addEventListener('input', () => {
+    world.maxBalls = Number(maxBalls.value);
+    maxVal.textContent = maxBalls.value;
+    if(world.balls.length > world.maxBalls){
+      world.balls.splice(0, world.balls.length - world.maxBalls);
+    }
+  });
+
+  toggle.addEventListener('click', () => { world.running = !world.running; toggle.textContent = world.running ? 'Pause' : 'Resume'; });
+  clearBtn.addEventListener('click', () => { world.balls.length = 0; });
+
+  // Keyboard shortcuts
+  window.addEventListener('keydown', (e)=>{
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){
+      for(let i=0;i<20;i++) spawnBall({ side: Math.random()<0.5?'buy':'sell', lots: Math.random()*1.5, profitUSD: rand(10,500)});
+    }
+  });
+
+  // Copy API helper on click of card
+  document.getElementById('help').addEventListener('click', async ()=>{
+    try{
+      const codeEl = document.querySelector('#help code');
+      await navigator.clipboard.writeText(codeEl ? codeEl.textContent : '');
+      const t = document.getElementById('toast'); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 1200);
+    }catch(err){/* ignore */}
+  });
+
+  // Initial warmup
+  for(let i=0;i<35;i++) spawnBall({ side: Math.random()<0.5?'buy':'sell', lots: rand(world.randomOptions.lotsRange[0], world.randomOptions.lotsRange[1]), profitUSD: rand(15,800), symbol: world.randomOptions.symbolPool[(Math.random()*world.randomOptions.symbolPool.length)|0]});
+})();
+</script>
+</body>
+</html>
