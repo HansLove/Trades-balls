@@ -91,14 +91,7 @@
         </div>
       </div>
 
-      <div class="card" id="help">
-        <h3>How to feed trades</h3>
-        <div class="tag">From the console or another script, call:</div>
-        <pre style="margin:6px 0 0; padding:8px 10px; background:#0c1530; border:1px solid #203055; border-radius:10px; overflow:auto; max-width:420px"><code style="font-size:12px; color:#bcd9ff; display:block">window.pushTrade({ side: "buy", lots: 0.3, profitUSD: 42, symbol: "XAUUSD" })
-window.pushTrade({ side: "sell", profitUSD: -350, symbol: "BTCUSD" })
-window.setTradeAdapter((p) => ({ side: p.s > 0 ? "buy" : "sell", profitUSD: p.s, symbol: p.sym, lots: p.l || 0.2 }))
-window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURUSD","US30"], bigProfitChance: 0.2 })</code></pre>
-      </div>
+     
     </div>
 
     <div class="footer">
@@ -123,7 +116,7 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
   let W=0,H=0, DPR = Math.max(1, Math.min(2, window.devicePixelRatio||1));
 
   const world = {
-    gravity: 1.1, // px/frame^2 (scaled by DPR)
+    gravity: 0.35, // px/frame^2 (scaled by DPR)
     running: true,
     maxBalls: 350,
     balls: [],
@@ -145,7 +138,10 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     perspective: 1200,
     cameraYaw: -0.18,
     cameraPitch: -0.22,
-    cameraZ: -260
+    cameraZ: -260,
+    autoCam: true,
+    camTime: 0,
+    camBase: { yaw: -0.18, pitch: -0.22, z: -260 }
   };
 
   // ===== 3D Projection helpers =====
@@ -259,6 +255,15 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
 
   function step(dt){
     const g = world.gravity * (dt/16.66);
+    // Auto camera motion for cinematic feel
+    if(world.autoCam){
+      world.camTime += dt*0.001;
+      const t = world.camTime;
+      const base = world.camBase;
+      world.cameraYaw = base.yaw + Math.sin(t*0.22)*0.08 + Math.sin(t*0.53)*0.03;
+      world.cameraPitch = base.pitch + Math.sin(t*0.18)*0.05;
+      world.cameraZ = base.z + Math.sin(t*0.27)*-40 + Math.cos(t*0.13)*25;
+    }
 
     // Balls
     for(const b of world.balls){
@@ -426,17 +431,17 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
   }
 
   function drawFloorGrid(){
-    const gridColor = 'rgba(255,255,255,0.08)';
+    const gridColor = 'rgba(255,255,255,0.05)';
     ctx.strokeStyle = gridColor; ctx.lineWidth = 1;
     const half = world.arenaHalfWidthX;
     // depth lines (constant x)
-    for(let x=-half; x<=half; x+= 80){
+    for(let x=-half; x<=half; x+= 120){
       const p0 = project3D({x, y:0, z: 0});
       const p1 = project3D({x, y:0, z: world.arenaDepthZ});
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
     }
     // horizontal lines (constant z)
-    for(let z=0; z<=world.arenaDepthZ; z+= 120){
+    for(let z=0; z<=world.arenaDepthZ; z+= 200){
       const p0 = project3D({x:-half, y:0, z});
       const p1 = project3D({x: half, y:0, z});
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
