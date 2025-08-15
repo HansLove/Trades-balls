@@ -146,10 +146,10 @@
     camBase: { yaw: -0.18, pitch: -0.22, z: -260 },
     platform: {
       y: 90,
-      halfWidthX: 520,
-      z0: 160,
-      z1: 520,
-      bounce: 0.4,
+      halfWidthX: 720,
+      z0: 120,
+      z1: 760,
+      bounce: 0.42,
       friction: 0.985
     }
   };
@@ -232,10 +232,14 @@
     );
     const color = side==='sell' ? '#ef4444' : '#48d597';
 
-    const x = rand(-world.arenaHalfWidthX*0.85, world.arenaHalfWidthX*0.85);
-    const z = rand(40, world.arenaDepthZ*0.25);
-    const y = rand(220, 360);
+    // Spawn from above over the platform for natural fall-in
+    const P = world.platform;
+    const x = rand(-P.halfWidthX*0.9, P.halfWidthX*0.9);
+    const z = rand(P.z0, P.z1);
+    const y = rand(380, 540);
     const b = new Ball({x,y,z,r,color,label: trade?.symbol||''});
+    // initial forward drift
+    b.vz += rand(0.1, 0.35);
     world.balls.push(b);
     if(world.balls.length > world.maxBalls){
       world.balls.splice(0, world.balls.length - world.maxBalls);
@@ -303,9 +307,9 @@
       if(b.z < b.r){ b.z = b.r; b.vz *= -0.5; }
       if(b.z > world.arenaDepthZ - b.r){ b.z = world.arenaDepthZ - b.r; b.vz *= -0.5; }
 
-      // Platform collision (slab y around world.platform.y between z0..z1)
+      // Platform collision (slab y around world.platform.y between z0..z1 and |x| <= halfWidthX)
       const P = world.platform;
-      if(b.z > P.z0 && b.z < P.z1 && b.y - b.r < P.y){
+      if(b.z > P.z0 && b.z < P.z1 && Math.abs(b.x) < P.halfWidthX && b.y - b.r < P.y){
         b.y = P.y + b.r;
         b.vy *= -P.bounce;
         // transfer some vertical energy to tangential spin and horizontal motion
@@ -315,7 +319,7 @@
         b.spinSpeedU += (b.vx)*0.02; b.spinSpeedV += (b.vz)*0.02;
       }
 
-      // Floor collision (floor at y=0)
+      // Floor collision (floor at y=0) with continuous projection check
       if(b.y - b.r < floorY){
         b.y = floorY + b.r;
         b.vy *= -bounce;
@@ -412,12 +416,12 @@
     for(const b of sorted){
       const proj = project3D(b);
 
-      // Shadow ellipse on floor position beneath ball (depend on distance + height)
+      // Shadow ellipse on floor beneath ball (use floor projection scale, not ball projection)
       const floorProj = project3D({x:b.x, y:0, z:b.z});
-      const heightFactor = clamp(1 - (b.y - b.r)/420, 0, 1);
-      const distanceFade = clamp(1 - (floorProj.zCam/(world.perspective*2)), 0.2, 1);
-      const shadowScale = Math.max(0, floorProj.scale * 0.95 * heightFactor);
-      const shadowAlpha = 0.26 * heightFactor * distanceFade;
+      const heightFactor = clamp(1 - (b.y - b.r)/360, 0, 1);
+      const distanceFade = clamp(1 - (floorProj.zCam/(world.perspective*1.8)), 0.2, 1);
+      const shadowScale = Math.max(0, floorProj.scale * 1.0 * heightFactor);
+      const shadowAlpha = 0.28 * heightFactor * distanceFade;
       const shadowW = Math.max(0.0001, b.r * 2.8 * shadowScale);
       const shadowH = Math.max(0.0001, shadowW * 0.42);
       ctx.fillStyle = `rgba(0,0,0,${clamp(shadowAlpha,0,0.25)})`;
@@ -488,7 +492,7 @@
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
     }
     // horizontal lines (constant z)
-    for(let z=0; z<=world.arenaDepthZ; z+= 260){
+    for(let z=0; z<=world.arenaDepthZ; z+= 300){
       const p0 = project3D({x:-half, y:0, z});
       const p1 = project3D({x: half, y:0, z});
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
@@ -499,10 +503,11 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.1)';
     ctx.beginPath(); ctx.moveTo(bw0.x, bw0.y); ctx.lineTo(bw1.x, bw1.y); ctx.stroke();
 
-    // vignetting at edges
+    // vignetting at edges (slightly stronger at bottom)
     const grad = ctx.createLinearGradient(0,0,0,H);
-    grad.addColorStop(0, 'rgba(0,0,0,0.06)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.18)');
+    grad.addColorStop(0, 'rgba(0,0,0,0.05)');
+    grad.addColorStop(0.6, 'rgba(0,0,0,0.1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.2)');
     ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
   }
 
