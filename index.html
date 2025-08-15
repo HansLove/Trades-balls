@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Trade Rain — Plinko-Style (Standalone)</title>
+  <title>TradeTab — Bouncing-Style</title>
   <style>
     :root{
       --bg:#0b1220; /* deep navy */
@@ -25,6 +25,7 @@
 
     /* HUD */
     .hud{position:fixed; top:16px; right:16px; display:flex; gap:12px; align-items:flex-start; z-index:10}
+    .hud.hidden{display:none}
     .card{background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03)); border:1px solid rgba(255,255,255,0.08); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius:16px; padding:12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25);} 
     .card h3{margin:0 0 8px 0; font-size:13px; letter-spacing:.4px; text-transform:uppercase; color:var(--muted)}
     .row{display:flex; gap:8px; align-items:center; margin:8px 0}
@@ -65,6 +66,7 @@
         <div class="row">
           <button class="btn" id="toggle">Pause</button>
           <button class="btn" id="clear">Clear</button>
+          <button class="btn" id="fullscreen">Fullscreen</button>
           <span class="pill"><span class="dot green"></span>Buy</span>
           <span class="pill"><span class="dot red"></span>Sell</span>
         </div>
@@ -100,7 +102,7 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     </div>
 
     <div class="footer">
-      <div class="tag">Trade Rain · Canvas physics demo · ⌘/Ctrl+K to spawn 20</div>
+      <!-- <div class="tag">Trade Rain · Canvas physics demo · ⌘/Ctrl+K to spawn 20</div> -->
     </div>
 
     <div id="toast" class="toast">Copied API usage to clipboard</div>
@@ -142,21 +144,25 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     arenaFloorY: 0,
     perspective: 1200,
     cameraYaw: -0.18,
+    cameraPitch: -0.22,
     cameraZ: -260
   };
 
   // ===== 3D Projection helpers =====
   const FLOOR_SCREEN_Y = () => H - 90; // where the floor baseline renders on screen
-  const Z_SKEW = 0.08; // lifts far objects to fake floor tilt
+  const Z_SKEW = 0.0; // no longer needed with camera pitch
   function project3D(pos){
     const cy = Math.cos(world.cameraYaw), syaw = Math.sin(world.cameraYaw);
+    const cp = Math.cos(world.cameraPitch), sp = Math.sin(world.cameraPitch);
     const rx = pos.x*cy - pos.z*syaw;
-    const rz = pos.z*cy + pos.x*syaw - world.cameraZ; // camera forward shift
+    const rzYaw = pos.z*cy + pos.x*syaw;
+    const ry = pos.y*cp - rzYaw*sp;
+    const rz = rzYaw*cp + pos.y*sp - world.cameraZ; // camera forward shift
     const persp = world.perspective;
     const scale = persp / (persp + rz);
     const sx = (W*0.5) + rx * scale;
-    const sy = FLOOR_SCREEN_Y() - pos.y * scale - rz * Z_SKEW;
-    return { x: sx, y: sy, scale };
+    const sy = FLOOR_SCREEN_Y() - ry * scale;
+    return { x: sx, y: sy, scale, zCam: rz };
   }
 
   function resize(){
@@ -361,22 +367,22 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     drawFloorGrid();
 
     // Balls (sorted back-to-front)
-    const sorted = world.balls.slice().sort((a,b)=> (b.z - a.z) + (b.y - a.y)*0.01);
+    const sorted = world.balls.slice().sort((a,b)=> (b.z - a.z));
     for(const b of sorted){
       const proj = project3D(b);
 
       // Shadow ellipse on floor position beneath ball
       const floorProj = project3D({x:b.x, y:0, z:b.z});
-      const heightFactor = clamp(1 - (b.y - b.r)/300, 0, 1);
+      const heightFactor = clamp(1 - (b.y - b.r)/380, 0, 1);
       const shadowScale = Math.max(0, proj.scale * heightFactor);
-      const shadowAlpha = 0.18 * heightFactor;
-      const shadowW = Math.max(0.0001, b.r * 2.2 * shadowScale);
+      const shadowAlpha = 0.22 * heightFactor;
+      const shadowW = Math.max(0.0001, b.r * 2.6 * shadowScale);
       const shadowH = Math.max(0.0001, shadowW * 0.45);
       ctx.fillStyle = `rgba(0,0,0,${clamp(shadowAlpha,0,0.25)})`;
       ctx.beginPath(); ctx.ellipse(floorProj.x, floorProj.y, shadowW, shadowH, 0, 0, Math.PI*2); ctx.fill();
 
       // Glow
-      const glow = ctx.createRadialGradient(proj.x, proj.y, Math.max(0.001, 2*proj.scale), proj.x, proj.y, Math.max(0.002, b.r*2.2*proj.scale));
+      const glow = ctx.createRadialGradient(proj.x, proj.y, Math.max(0.001, 2*proj.scale), proj.x, proj.y, Math.max(0.002, b.r*2.6*proj.scale));
       glow.addColorStop(0, b.color + '');
       glow.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = glow;
@@ -384,6 +390,10 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
 
       // Core sphere with simple lighting
       const coreR = b.r * proj.scale;
+      // fake rim lighting by darkening edge
+      const rim = ctx.createRadialGradient(proj.x, proj.y, Math.max(0.001, coreR*0.65), proj.x, proj.y, Math.max(0.002, coreR));
+      rim.addColorStop(0, 'rgba(0,0,0,0)');
+      rim.addColorStop(1, 'rgba(0,0,0,0.25)');
       const lightX = -0.6, lightY = -0.8; // pseudo light dir
       const grad = ctx.createRadialGradient(
         proj.x + coreR*lightX*0.45,
@@ -401,6 +411,7 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
       ctx.beginPath();
       ctx.arc(proj.x, proj.y, coreR, 0, Math.PI*2);
       ctx.fill();
+      ctx.fillStyle = rim; ctx.beginPath(); ctx.arc(proj.x, proj.y, coreR, 0, Math.PI*2); ctx.fill();
 
       // Label (symbol)
       if(b.r > 14 && b.label){
@@ -435,6 +446,12 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     const bw1 = project3D({x: half, y:0, z:world.arenaDepthZ});
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
     ctx.beginPath(); ctx.moveTo(bw0.x, bw0.y); ctx.lineTo(bw1.x, bw1.y); ctx.stroke();
+
+    // vignetting at edges
+    const grad = ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0, 'rgba(0,0,0,0.06)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.18)');
+    ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
   }
 
   // ===== Loop =====
@@ -481,6 +498,7 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
   const toggle = document.getElementById('toggle');
   const clearBtn = document.getElementById('clear');
   const auto = document.getElementById('auto');
+  const fullscreenBtn = document.getElementById('fullscreen');
 
   gravity.addEventListener('input', () => {
     world.gravity = Number(gravity.value);
@@ -498,10 +516,49 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
   toggle.addEventListener('click', () => { world.running = !world.running; toggle.textContent = world.running ? 'Pause' : 'Resume'; });
   clearBtn.addEventListener('click', () => { world.balls.length = 0; });
 
+  // Fullscreen toggle and HUD hide
+  async function enterFullscreen(){
+    const el = document.documentElement;
+    if(el.requestFullscreen){ await el.requestFullscreen(); }
+    else if(el.webkitRequestFullscreen){ el.webkitRequestFullscreen(); }
+  }
+  async function exitFullscreen(){
+    if(document.exitFullscreen){ await document.exitFullscreen(); }
+    else if(document.webkitExitFullscreen){ document.webkitExitFullscreen(); }
+  }
+  function setHudHidden(hidden){
+    const hud = document.querySelector('.hud');
+    if(!hud) return;
+    hud.classList.toggle('hidden', hidden);
+  }
+  let hudHidden = false;
+  fullscreenBtn.addEventListener('click', async ()=>{
+    try{
+      if(!document.fullscreenElement && !(document.webkitFullscreenElement)){
+        await enterFullscreen();
+        hudHidden = true; setHudHidden(true);
+        fullscreenBtn.textContent = 'Exit Fullscreen';
+      }else{
+        await exitFullscreen();
+        hudHidden = false; setHudHidden(false);
+        fullscreenBtn.textContent = 'Fullscreen';
+      }
+    }catch(err){ /* ignore */ }
+  });
+  document.addEventListener('fullscreenchange', ()=>{
+    if(!document.fullscreenElement && !(document.webkitFullscreenElement)){
+      hudHidden = false; setHudHidden(false);
+      fullscreenBtn.textContent = 'Fullscreen';
+    }
+  });
+
   // Keyboard shortcuts
   window.addEventListener('keydown', (e)=>{
     if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){
       for(let i=0;i<20;i++) spawnBall({ side: Math.random()<0.5?'buy':'sell', lots: Math.random()*1.5, profitUSD: rand(10,500)});
+    }
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='f'){
+      fullscreenBtn.click();
     }
   });
 
