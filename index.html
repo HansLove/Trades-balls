@@ -125,8 +125,6 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     running: true,
     maxBalls: 350,
     balls: [],
-    pegs: [],
-    bins: [],
     lastSpawn: 0,
     spawnInterval: 1000/6, // ms per ball in auto mode
     adapter: null,
@@ -137,17 +135,24 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
       profitRangeSmall: [5, 250],
       profitRangeBig: [250, 2000],
       bigProfitChance: 0.3,
-    }
+    },
+    // 3D arena
+    arenaHalfWidthX: 600,
+    arenaDepthZ: 1400,
+    arenaFloorY: 0,
+    perspective: 1200
   };
 
-  // ===== Peg Field constants (Plinko grid) =====
-  const pegSpacingX = 48; // px
-  const pegSpacingY = 42; // px
-  const pegR = 5;
-
-  // ===== Spatial Hash storage (pegs) =====
-  const cell = 56;
-  const grid = new Map();
+  // ===== 3D Projection helpers =====
+  const FLOOR_SCREEN_Y = () => H - 90; // where the floor baseline renders on screen
+  const Z_SKEW = 0.08; // lifts far objects to fake floor tilt
+  function project3D(pos){
+    const persp = world.perspective;
+    const scale = persp / (persp + pos.z);
+    const sx = (W*0.5) + pos.x * scale;
+    const sy = FLOOR_SCREEN_Y() - pos.y * scale - pos.z * Z_SKEW;
+    return { x: sx, y: sy, scale };
+  }
 
   function resize(){
     W = c.clientWidth = window.innerWidth;
@@ -155,61 +160,18 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     c.width = Math.floor(W*DPR);
     c.height = Math.floor(H*DPR);
     ctx.setTransform(DPR,0,0,DPR,0,0);
-    buildPegs();
-    buildGrid(); // rebuild spatial hash when pegs change
-    buildBins();
+    // nothing else for 3D scene
   }
   window.addEventListener('resize', resize, {passive:true});
   resize();
 
-  // ===== Peg Field (Plinko grid) =====
-  function buildPegs(){
-    const marginTop = 60, marginSide = 60;
-    const cols = Math.floor((W - marginSide*2) / pegSpacingX);
-    const rows = Math.floor((H*0.65 - marginTop) / pegSpacingY);
-    const startX = (W - cols*pegSpacingX)/2 + pegSpacingX*0.5;
-    world.pegs.length = 0;
-    for(let r=0;r<rows;r++){
-      for(let cidx=0;cidx<cols;cidx++){
-        const offset = (r%2===0)?0:pegSpacingX/2;
-        const x = startX + cidx*pegSpacingX + offset;
-        const y = marginTop + r*pegSpacingY;
-        world.pegs.push({x,y,r:pegR});
-      }
-    }
-  }
-
-  // ===== Bottom Bins (visual only) =====
-  function buildBins(){
-    const el = document.getElementById('bins');
-    el.innerHTML = '';
-    const count = Math.floor(W / 60);
-    for(let i=0;i<count;i++){
-      const b = document.createElement('div');
-      b.className='bin';
-      b.style.left = `${(i* (W/count))|0}px`;
-      b.style.height = `${60 + (i%2)*20}px`;
-      el.appendChild(b);
-    }
-  }
-
-  // ===== Spatial Hash (pegs) =====
-  function gridKey(x,y){return ((x/cell)|0)+','+((y/cell)|0)}
-  function buildGrid(){
-    grid.clear();
-    for(const p of world.pegs){
-      const key = gridKey(p.x,p.y);
-      if(!grid.has(key)) grid.set(key,[]);
-      grid.get(key).push(p);
-    }
-  }
-  buildGrid();
+  // (Plinko grid and spatial hash removed)
 
   // ===== Balls =====
   class Ball{
-    constructor({x,y,r,color,label}){
-      this.x = x; this.y = y; this.r = r; this.color = color; this.label = label||'';
-      this.vx = rand(-0.5,0.5); this.vy = 0;
+    constructor({x,y,z,r,color,label}){
+      this.x = x; this.y = y; this.z = z; this.r = r; this.color = color; this.label = label||'';
+      this.vx = rand(-0.5,0.5); this.vy = 0; this.vz = rand(-0.2,0.2);
       this.sleep = false; // when settled at the bottom
     }
   }
@@ -237,9 +199,10 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     );
     const color = side==='sell' ? '#ef4444' : '#48d597';
 
-    const x = W*0.2 + Math.random()*W*0.6; // spawn within center band
-    const y = -40;
-    const b = new Ball({x,y,r,color,label: trade?.symbol||''});
+    const x = rand(-world.arenaHalfWidthX*0.85, world.arenaHalfWidthX*0.85);
+    const z = rand(40, world.arenaDepthZ*0.25);
+    const y = rand(120, 240);
+    const b = new Ball({x,y,z,r,color,label: trade?.symbol||''});
     world.balls.push(b);
     if(world.balls.length > world.maxBalls){
       world.balls.splice(0, world.balls.length - world.maxBalls);
@@ -273,69 +236,39 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
 
   // ===== Physics =====
   const bounce = 0.55; // restitution on floor
-  const air = 0.999;   // air drag
-  const floorY = () => H - 90; // top of bins
+  const air = 0.998;   // air drag
+  const floorY = 0;    // world floor plane y
 
   function step(dt){
     const g = world.gravity * (dt/16.66);
-
-    // Rebuild grid occasionally (pegs static; once per resize is enough)
-    // buildGrid(); // pegs don't move — skip per-frame for perf
 
     // Balls
     for(const b of world.balls){
       if(b.sleep) continue;
       // Integrate
       b.vy += g;
-      b.vx *= air; b.vy *= air;
-      b.x += b.vx; b.y += b.vy;
+      b.vx *= air; b.vy *= air; b.vz *= air;
+      b.x += b.vx; b.y += b.vy; b.z += b.vz;
 
-      // Walls
-      if(b.x < b.r){ b.x=b.r; b.vx*=-0.4; }
-      if(b.x > W-b.r){ b.x=W-b.r; b.vx*=-0.4; }
+      // Arena walls
+      if(b.x < -world.arenaHalfWidthX + b.r){ b.x = -world.arenaHalfWidthX + b.r; b.vx *= -0.5; }
+      if(b.x >  world.arenaHalfWidthX - b.r){ b.x =  world.arenaHalfWidthX - b.r; b.vx *= -0.5; }
+      if(b.z < b.r){ b.z = b.r; b.vz *= -0.5; }
+      if(b.z > world.arenaDepthZ - b.r){ b.z = world.arenaDepthZ - b.r; b.vz *= -0.5; }
 
-      // Peg collisions via spatial lookup
-      const gx = Math.floor(b.x/cell), gy = Math.floor(b.y/cell);
-      for(let ix=-1; ix<=1; ix++){
-        for(let iy=-1; iy<=1; iy++){
-          const key = (gx+ix)+","+(gy+iy);
-          const list = grid.get(key); if(!list) continue;
-          for(const p of list){
-            const dx = b.x - p.x;
-            const dy = b.y - p.y;
-            const d2 = dx*dx + dy*dy;
-            const min = b.r + p.r + 1;
-            if(d2 < min*min){
-              const d = Math.sqrt(d2) || 0.001;
-              const nx = dx/d, ny = dy/d;
-              // Push out
-              const overlap = (min - d);
-              b.x += nx * overlap;
-              b.y += ny * overlap;
-              // Reflect velocity with some dampening
-              const vn = b.vx*nx + b.vy*ny;
-              b.vx -= 1.4 * vn * nx;
-              b.vy -= 1.4 * vn * ny;
-            }
-          }
-        }
-      }
-
-      // Floor
-      const fY = floorY();
-      if(b.y + b.r > fY){
-        b.y = fY - b.r;
+      // Floor collision
+      if(b.y - b.r < floorY){
+        b.y = floorY + b.r;
         b.vy *= -bounce;
-        b.vx *= 0.98;
-        if(Math.abs(b.vy) < 0.35){
-          // Consider it sleeping (settled)
-          b.vy = 0; b.vx *= 0.97; b.sleep = true;
+        b.vx *= 0.985; b.vz *= 0.985;
+        if(Math.abs(b.vy) < 0.25 && Math.abs(b.vx) < 0.05 && Math.abs(b.vz) < 0.05){
+          b.vy = 0; b.vx *= 0.97; b.vz *= 0.97; b.sleep = true;
         }
       }
 
       // Gentle sleeping friction
       if(b.sleep){
-        b.vx *= 0.985; if(Math.abs(b.vx) < 0.02) b.vx = 0;
+        b.vx *= 0.985; b.vz *= 0.985; if(Math.abs(b.vx) < 0.02) b.vx = 0; if(Math.abs(b.vz) < 0.02) b.vz = 0;
       }
     }
   }
@@ -351,35 +284,48 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
     grd.addColorStop(1,'rgba(255,255,255,0)');
     ctx.fillStyle = grd; ctx.fillRect(0,0,W,H);
 
-    // Pegs
-    ctx.fillStyle = '#1f2d47';
-    for(const p of world.pegs){
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
-      ctx.fill();
-    }
+    // Floor grid in perspective
+    drawFloorGrid();
 
-    // Floor line
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, floorY());
-    ctx.lineTo(W, floorY());
-    ctx.stroke();
+    // Balls (sorted back-to-front)
+    const sorted = world.balls.slice().sort((a,b)=> b.z - a.z);
+    for(const b of sorted){
+      const proj = project3D(b);
 
-    // Balls
-    for(const b of world.balls){
+      // Shadow ellipse on floor position beneath ball
+      const floorProj = project3D({x:b.x, y:0, z:b.z});
+      const shadowScale = proj.scale * (1 - Math.max(0, (b.y- b.r)/300));
+      const shadowAlpha = 0.18 * (1 - Math.max(0, (b.y- b.r)/260));
+      const shadowW = b.r * 2.2 * shadowScale;
+      const shadowH = shadowW * 0.45;
+      ctx.fillStyle = `rgba(0,0,0,${clamp(shadowAlpha,0,0.25)})`;
+      ctx.beginPath(); ctx.ellipse(floorProj.x, floorProj.y, shadowW, shadowH, 0, 0, Math.PI*2); ctx.fill();
+
       // Glow
-      const glow = ctx.createRadialGradient(b.x, b.y, 2, b.x, b.y, b.r*2.2);
+      const glow = ctx.createRadialGradient(proj.x, proj.y, 2, proj.x, proj.y, b.r*2.2*proj.scale);
       glow.addColorStop(0, b.color + '');
       glow.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = glow;
-      ctx.beginPath(); ctx.arc(b.x, b.y, b.r*2.2, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(proj.x, proj.y, b.r*2.2*proj.scale, 0, Math.PI*2); ctx.fill();
 
-      // Core
-      ctx.fillStyle = b.color;
+      // Core sphere with simple lighting
+      const coreR = b.r * proj.scale;
+      const lightX = -0.6, lightY = -0.8; // pseudo light dir
+      const grad = ctx.createRadialGradient(
+        proj.x + coreR*lightX*0.5,
+        proj.y + coreR*lightY*0.5,
+        coreR*0.2,
+        proj.x,
+        proj.y,
+        coreR
+      );
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.08, '#ffffff');
+      grad.addColorStop(0.12, b.color);
+      grad.addColorStop(1, b.color);
+      ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.arc(proj.x, proj.y, coreR, 0, Math.PI*2);
       ctx.fill();
 
       // Label (symbol)
@@ -387,11 +333,34 @@ window.setRandomStreamOptions({ buyProbability: 0.6, symbolPool: ["XAUUSD","EURU
         ctx.font = '600 10px ui-sans-serif, system-ui, -apple-system';
         ctx.fillStyle = 'rgba(0,0,0,.45)';
         ctx.textAlign = 'center';
-        ctx.fillText(b.label.toUpperCase(), b.x+1, b.y+3);
+        ctx.fillText(b.label.toUpperCase(), proj.x+1, proj.y+3);
         ctx.fillStyle = 'rgba(255,255,255,.9)';
-        ctx.fillText(b.label.toUpperCase(), b.x, b.y+2);
+        ctx.fillText(b.label.toUpperCase(), proj.x, proj.y+2);
       }
     }
+  }
+
+  function drawFloorGrid(){
+    const gridColor = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = gridColor; ctx.lineWidth = 1;
+    const half = world.arenaHalfWidthX;
+    // depth lines (constant x)
+    for(let x=-half; x<=half; x+= 80){
+      const p0 = project3D({x, y:0, z: 0});
+      const p1 = project3D({x, y:0, z: world.arenaDepthZ});
+      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    }
+    // horizontal lines (constant z)
+    for(let z=0; z<=world.arenaDepthZ; z+= 120){
+      const p0 = project3D({x:-half, y:0, z});
+      const p1 = project3D({x: half, y:0, z});
+      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    }
+    // back wall faint line
+    const bw0 = project3D({x:-half, y:0, z:world.arenaDepthZ});
+    const bw1 = project3D({x: half, y:0, z:world.arenaDepthZ});
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.moveTo(bw0.x, bw0.y); ctx.lineTo(bw1.x, bw1.y); ctx.stroke();
   }
 
   // ===== Loop =====
